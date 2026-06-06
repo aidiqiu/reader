@@ -8,10 +8,10 @@ from hashlib import md5
 
 st.set_page_config(page_title="汐涵阅读器", layout="wide")
 
-# ---------- 自定义 CSS 样式（精简并增强兼容性）----------
+# ---------- 响应式 CSS 样式（全面适配移动端与大屏）----------
 st.markdown("""
 <style>
-    /* 强力修复标题裁剪问题，移除不必要的限制 */
+    /* 强力修复标题裁剪问题 */
     .main .block-container h1 {
         font-size: 2.2rem !important;
         white-space: normal !important;
@@ -20,23 +20,48 @@ st.markdown("""
         padding-top: 0.5rem !important;
         padding-bottom: 0.5rem !important;
     }
-    /* 页面整体内边距减小，让阅读区更大 */
+    
+    /* 基础内边距优化 */
     .block-container {
-        padding-top: 1.5rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 2rem !important;
     }
-    /* 优化中文段落排版：首行缩进，增加行高和段落间距 */
+    
+    /* 中文正文排版优化 */
     .article-para {
-        font-size: 1.15rem !important;
-        line-height: 1.8 !important;
-        margin-bottom: 24px !important;
+        font-size: 1.18rem !important;
+        line-height: 1.85 !important;
+        margin-bottom: 26px !important;
         text-align: justify;
         letter-spacing: 0.5px;
+        color: #2F3542;
+    }
+
+    /* 📱 移动端屏幕专属适配 (当屏幕宽度小于 768px 时生效) */
+    @media (max-width: 768px) {
+        .main .block-container h1 {
+            font-size: 1.6rem !important; /* 手机端标题稍微调小，防止换行过多 */
+        }
+        .block-container {
+            padding-left: 0.8rem !important;   /* 缩减手机两边留白 */
+            padding-right: 0.8rem !important;
+            padding-top: 0.5rem !important;
+        }
+        .article-para {
+            font-size: 1.1rem !important;  /* 手机端更适合的字号 */
+            line-height: 1.75 !important;
+            margin-bottom: 20px !important; /* 稍微紧凑一点的段落间距 */
+        }
+        /* 强制让移动端的按钮在大框架下有更好的触控体验 */
+        .stButton>button {
+            padding: 0.5rem 0.2rem !important;
+            font-size: 0.95rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# 优先从 Streamlit Secrets 读取，如果本地运行没有配置，则使用备用 Key
+# ---------- 安全读取百度翻译 API 配置 ----------
 BAIDU_APPID = st.secrets.get("BAIDU_APPID", "")
 BAIDU_APPKEY = st.secrets.get("BAIDU_APPKEY", "")
 
@@ -51,8 +76,9 @@ if "translated_paragraphs" not in st.session_state:
     st.session_state.translated_paragraphs = []
 if "url_history" not in st.session_state:
     st.session_state.url_history = []
+if "show_success" not in st.session_state:
+    st.session_state.show_success = False
 
-# 使用 Markdown 渲染大标题，稳定性更好
 st.markdown("# 📚 汐涵阅读器")
 st.markdown("输入英文书籍章节的网址，沉浸式体验中文翻译。")
 
@@ -62,27 +88,33 @@ url_input = st.text_input(
     key="url_input"
 )
 
-# ---------- 段落过滤函数 ----------
+# ---------- 段落过滤函数（拒绝将原页面的“上一页/下一页”文本送去翻译）----------
 def is_valid_paragraph(text):
-    """过滤掉导航、版权、空内容等非正文段落"""
-    if not text or len(text.strip()) < 3:
+    """精确清洗非正文元素，防止“上一页”等导航文本混入阅读区"""
+    if not text or len(text.strip()) < 2:
         return False
 
     text_lower = text.lower().strip()
 
-    if text_lower in ['next', 'prev', 'previous', 'next »', '« prev', '« previous']:
-        return False
-    if text_lower.startswith('next') and len(text) < 80:
-        return False
-    if text_lower.startswith('prev') and len(text) < 80:
-        return False
+    # 1. 拦截完全匹配或包含常见翻页词和符号的短文本
+    nav_words = [
+        'next', 'prev', 'previous', 'next »', '« prev', '« previous', 
+        'next page', 'previous page', 'index', 'contents', 'table of contents',
+        '‹', '›', '»', '«', 'rightarrow', 'leftarrow'
+    ]
+    for word in nav_words:
+        if word == text_lower:
+            return False
+        if word in text_lower and len(text) < 40:
+            return False
 
+    # 2. 过滤小说网站常用的其他干扰项
     exclude_keywords = ['©', 'copyright', 'all rights reserved', 'chapter', 'menu', 'home', 'page']
     for kw in exclude_keywords:
-        if kw in text_lower:
-            if len(text) < 120:
-                return False
+        if kw in text_lower and len(text) < 100:
+            return False
 
+    # 3. 过滤纯数字
     if text.replace('.', '').replace(',', '').replace(' ', '').isdigit():
         return False
 
@@ -96,21 +128,31 @@ def fetch_content_and_links(target_url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        raw_paragraphs = []
-        # 核心优化：保留原网页段落的独立性
-        for p in soup.find_all('p'):
-            text = p.get_text().strip()
-            if text:
-                raw_paragraphs.append(text)
+        # 尝试寻找正文核心容器
+        content_container = None
+        possible_selectors = [
+            'div[class*="content"]', 'div[id*="content"]', 
+            'div[class*="chapter"]', 'div[id*="chapter"]', 
+            'article', 'div[class*="reader"]', 'div[class*="book"]'
+        ]
+        for selector in possible_selectors:
+            container = soup.select_one(selector)
+            if container and len(container.get_text()) > 400:
+                content_container = container
+                break
+        
+        if not content_container:
+            content_container = soup.body if soup.body else soup
 
-        paragraphs = [p for p in raw_paragraphs if is_valid_paragraph(p)]
-
-        if len(paragraphs) < 3:
-            paragraphs = [p for p in raw_paragraphs if len(p.strip()) > 10]
-
-        if not paragraphs:
-            full_text = soup.get_text().strip()
-            paragraphs = [p.strip() for p in full_text.split('\n') if len(p.strip()) > 10]
+        # 处理换行符
+        for br in content_container.find_all("br"):
+            br.replace_with("\n")
+        
+        raw_text = content_container.get_text()
+        lines = [line.strip() for line in raw_text.split('\n')]
+        
+        # 核心清洗：不符合正文标准的（包括原站点的翻页文字）直接干掉
+        paragraphs = [p for p in lines if is_valid_paragraph(p)]
 
         # 提取上一页链接
         prev_link = None
@@ -136,10 +178,13 @@ def fetch_content_and_links(target_url):
     except Exception as e:
         return f"错误：抓取网页时出错。 {e}", None, None
 
-# ---------- 单段落翻译（重大修复：支持多行翻译拼接）----------
+# ---------- 单段落翻译 ----------
 def translate_single_paragraph(text):
     if not text or len(text.strip()) == 0:
         return ""
+
+    if not BAIDU_APPID or not BAIDU_APPKEY:
+        return "[错误: 未在 Secrets 中配置百度翻译密钥]"
 
     endpoint = "https://fanyi-api.baidu.com/api/trans/vip/translate"
     max_retries = 3
@@ -162,9 +207,8 @@ def translate_single_paragraph(text):
             result = response.json()
 
             if 'trans_result' in result:
-                # 【修复核心】遍历所有翻译结果切片，用换行符拼接，确保长段落不丢失、不合并
                 translated_chunks = [sub_res['dst'] for sub_res in result['trans_result']]
-                return "\n".join(translated_chunks)
+                return " ".join(translated_chunks)
             else:
                 error_msg = result.get('error_msg', '未知错误')
                 if attempt < max_retries - 1:
@@ -228,6 +272,8 @@ def load_and_translate(url, add_to_history=True):
 
         with st.spinner(f"正在翻译 {len(paragraphs)} 个段落..."):
             st.session_state.translated_paragraphs = translate_paragraphs(paragraphs)
+            # 标记需要展示“成功提示”
+            st.session_state.show_success = True
 
     st.session_state.current_url = url
 
@@ -247,7 +293,14 @@ if st.button("开始阅读", type="primary", use_container_width=True):
 
 # ---------- 显示翻译结果 ----------
 if st.session_state.translated_paragraphs:
-    st.success("翻译完成，请尽情阅读！")
+    
+    # 【新功能】翻译完成提示信息 3 秒后自动消失
+    if st.session_state.show_success:
+        msg_placeholder = st.empty()
+        msg_placeholder.success("🎉 翻译完成，请尽情阅读！")
+        time.sleep(3.0)
+        msg_placeholder.empty() # 3秒时间到，清空该组件，不占屏幕空间
+        st.session_state.show_success = False # 重置状态
 
     # 顶部导航栏
     col1, col2 = st.columns(2)
@@ -277,12 +330,10 @@ if st.session_state.translated_paragraphs:
 
     st.markdown("### 📖 中文阅读区")
 
-    # 【重要优化】优雅渲染中文正文，支持段落内部的换行符
+    # 逐段优雅渲染
     for para in st.session_state.translated_paragraphs:
         if para and para.strip():
-            # 将翻译结果中的内部换行转化为 HTML 的换行标签
-            formatted_para = para.replace("\n", "<br>")
-            st.markdown(f"<div class='article-para'>{formatted_para}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='article-para'>{para}</div>", unsafe_allow_html=True)
 
     # 底部导航栏
     st.markdown("---")
@@ -300,4 +351,5 @@ if st.session_state.translated_paragraphs:
                 scroll_to_top()
                 st.rerun()
 
+    # 再次确保滚动置顶
     scroll_to_top()
