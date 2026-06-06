@@ -7,28 +7,27 @@ from urllib.parse import urljoin
 from hashlib import md5
 
 # ---------- 页面配置 ----------
-st.set_page_config(page_title="汐涵阅读器", layout="wide")
+st.set_page_config(page_title="汐涵阅读器", layout="wide", initial_sidebar_state="collapsed")
 
-# ---------- 响应式 CSS 样式 ----------
+# ---------- 核心 CSS & JS 注入 ----------
 st.markdown("""
 <style>
-    /* 彻底解决标题裁剪：改用自定义容器，脱离原生限制 */
-    .app-title {
-        font-size: 1.6rem;
-        font-weight: 800;
+    /* 1. 暴力解决标题显示问题，接管系统自带标题样式 */
+    h1 {
+        font-size: 2.2rem !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow: visible !important;
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+        color: #1E293B !important;
         text-align: center;
-        margin-top: 0.5rem;
-        margin-bottom: 1.5rem;
-        color: #1E293B;
-        line-height: 1.4;
     }
     
-    /* 基础内边距优化 */
+    /* 基础内边距 */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 2rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
     }
     
     /* 中文正文排版优化 */
@@ -41,49 +40,101 @@ st.markdown("""
         color: #2F3542;
     }
 
-    /* 原文/双语模式下的英文专属排版（字号稍小，颜色变浅区分） */
+    /* 原文/双语模式下的英文专属排版 */
     .en-text {
         font-size: 1.05rem;
         color: #64748B;
-        margin-bottom: 8px; /* 和下方的中文紧凑一点 */
+        margin-bottom: 8px; 
         font-family: Georgia, serif;
     }
 
-    /* 优化阅读模式选择器的外观（类似浮动胶囊） */
+    /* 2. 左侧浮动智能菜单样式 (译文/原文/双语) */
+    div[data-testid="stRadio"] {
+        position: fixed;
+        left: 15px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 9999;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 15px 10px;
+        border-radius: 12px;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+        border: 1px solid #E2E8F0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); /* 丝滑过渡 */
+    }
+    /* 让单选框垂直排列更美观 */
     div[data-testid="stRadio"] > div {
         display: flex;
-        justify-content: center;
-        background-color: #F1F5F9;
-        padding: 5px 15px;
-        border-radius: 25px;
-        width: fit-content;
-        margin: 0 auto 20px auto;
-        gap: 15px;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    /* 3. 红底白字高亮按钮（针对翻页和开始阅读） */
+    button[kind="primary"] {
+        background-color: #FF4B4B !important; /* Streamlit 经典红 */
+        color: white !important;
+        font-weight: bold !important;
+        border-radius: 8px !important;
+        border: none !important;
+        transition: transform 0.1s;
+    }
+    button[kind="primary"]:active {
+        transform: scale(0.95);
+    }
+    /* 专门放大箭头的字号，保持按钮长度为箭头的 2-3 倍 */
+    .nav-btn-container button p {
+        font-size: 1.4rem !important; 
     }
 
     /* 📱 移动端屏幕专属适配 */
     @media (max-width: 768px) {
-        .app-title {
-            font-size: 1.4rem;
-        }
-        .block-container {
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
-        }
-        .article-para {
-            font-size: 1.1rem;
-            line-height: 1.75;
-            margin-bottom: 20px;
-        }
-        .en-text {
-            font-size: 0.95rem;
-        }
-        /* 翻页按钮铺满 */
-        .stButton>button {
-            padding: 0.4rem 0 !important;
+        h1 { font-size: 1.6rem !important; }
+        .block-container { padding-left: 0.8rem !important; padding-right: 0.8rem !important; }
+        .article-para { font-size: 1.1rem; line-height: 1.75; margin-bottom: 20px; }
+        .en-text { font-size: 0.95rem; }
+        /* 手机端悬浮菜单靠边一点，稍微缩小 */
+        div[data-testid="stRadio"] {
+            left: 5px;
+            padding: 10px 5px;
+            transform: translateY(-50%) scale(0.9);
         }
     }
 </style>
+
+<script>
+    // 注入智能滚动监听：上滑显示，下滑隐藏悬浮菜单
+    (function() {
+        const doc = window.parent.document;
+        const mainScrollArea = doc.querySelector('.main');
+        if (!mainScrollArea) return;
+
+        // 防止重复绑定
+        if (mainScrollArea.dataset.scrollBound === 'true') return;
+        mainScrollArea.dataset.scrollBound = 'true';
+
+        let lastScrollTop = 0;
+        mainScrollArea.addEventListener('scroll', function() {
+            const currentScroll = mainScrollArea.scrollTop;
+            const switcher = doc.querySelector('div[data-testid="stRadio"]');
+            
+            if (switcher) {
+                // 如果下滑超过 50px，菜单向左隐藏 
+                if (currentScroll > lastScrollTop && currentScroll > 50) {
+                    switcher.style.opacity = '0';
+                    switcher.style.pointerEvents = 'none';
+                    switcher.style.transform = 'translateY(-50%) translateX(-150%)';
+                } 
+                // 如果上滑，菜单弹回
+                else if (currentScroll < lastScrollTop) {
+                    switcher.style.opacity = '1';
+                    switcher.style.pointerEvents = 'auto';
+                    switcher.style.transform = 'translateY(-50%) translateX(0)';
+                }
+            }
+            lastScrollTop = currentScroll <= 0 ? 0 : currentScroll;
+        }, { passive: true });
+    })();
+</script>
 """, unsafe_allow_html=True)
 
 # ---------- 百度翻译 API 配置 ----------
@@ -91,21 +142,14 @@ BAIDU_APPID = st.secrets.get("BAIDU_APPID", "")
 BAIDU_APPKEY = st.secrets.get("BAIDU_APPKEY", "")
 
 # ---------- 会话状态初始化 ----------
-if "current_url" not in st.session_state:
-    st.session_state.current_url = ""
-if "next_url" not in st.session_state:
-    st.session_state.next_url = ""
-if "prev_url" not in st.session_state:
-    st.session_state.prev_url = ""
-if "url_history" not in st.session_state:
-    st.session_state.url_history = []
-# 核心改变：改用列表字典存储段落，按需翻译
-# 格式: [{"en": "原文", "zh": "译文"或None}]
-if "paragraphs_data" not in st.session_state:
-    st.session_state.paragraphs_data = []
+if "current_url" not in st.session_state: st.session_state.current_url = ""
+if "next_url" not in st.session_state: st.session_state.next_url = ""
+if "prev_url" not in st.session_state: st.session_state.prev_url = ""
+if "url_history" not in st.session_state: st.session_state.url_history = []
+if "paragraphs_data" not in st.session_state: st.session_state.paragraphs_data = []
 
-# 自定义标题（解决显示不全）
-st.markdown("<div class='app-title'>📚 汐涵阅读器</div>", unsafe_allow_html=True)
+# 稳定版大标题
+st.markdown("# 📚 汐涵阅读器")
 
 url_input = st.text_input(
     "",
@@ -149,7 +193,6 @@ def fetch_content_and_links(target_url):
         lines = [line.strip() for line in raw_text.split('\n')]
         paragraphs = [p for p in lines if is_valid_paragraph(p)]
 
-        # 链接提取
         prev_link = None
         prev_tag = soup.find('a', rel='prev') or soup.find('a', class_='p') or soup.find('a', string=lambda t: t and ('prev' in t.lower() or 'previous' in t.lower()))
         if prev_tag and prev_tag.get('href'): prev_link = urljoin(target_url, prev_tag['href'])
@@ -179,13 +222,13 @@ def translate_single_paragraph(text):
                 return " ".join([chunk['dst'] for chunk in res['trans_result']])
             else:
                 if attempt < 2: time.sleep(0.5); continue
-                return f"[翻译失败: {res.get('error_msg', '未知')}]"
+                return f"[翻译失败]"
         except Exception as e:
             if attempt < 2: time.sleep(0.5)
             else: return f"[翻译异常]"
     return "[翻译失败]"
 
-# ---------- 页面初始化（仅抓取，不阻塞翻译） ----------
+# ---------- 页面初始化 ----------
 def init_new_page(url):
     with st.spinner("正在抓取网页..."):
         paragraphs, prev_link, next_link = fetch_content_and_links(url)
@@ -196,21 +239,15 @@ def init_new_page(url):
         if isinstance(paragraphs, str):
             st.session_state.paragraphs_data = [{"en": paragraphs, "zh": paragraphs}]
         else:
-            # 初始化状态：只有英文，中文为 None
             st.session_state.paragraphs_data = [{"en": p, "zh": None} for p in paragraphs]
             
         if not st.session_state.url_history or st.session_state.url_history[-1] != url:
             st.session_state.url_history.append(url)
 
-# ---------- 强制滚动到顶部 ----------
 def scroll_to_top():
-    st.markdown("""
-    <script>
-        (function() { window.scrollTo(0, 0); var main = window.parent.document.querySelector('.main'); if(main) { main.scrollTo(0, 0); } })();
-    </script>
-    """, unsafe_allow_html=True)
+    st.markdown("""<script>(function() { window.scrollTo(0, 0); var main = window.parent.document.querySelector('.main'); if(main) { main.scrollTo(0, 0); } })();</script>""", unsafe_allow_html=True)
 
-# ---------- 按钮触发区 ----------
+# ---------- 开始阅读按钮 ----------
 if st.button("开始阅读", type="primary", use_container_width=True):
     if url_input:
         st.session_state.url_history = []
@@ -221,43 +258,37 @@ if st.button("开始阅读", type="primary", use_container_width=True):
         st.warning("请先输入一个网址！")
 
 # ==========================================
-# 📖 阅读渲染区（核心优化：边译边读）
+# 📖 阅读渲染区
 # ==========================================
 if st.session_state.paragraphs_data:
     st.markdown("---")
     
-    # 浮动阅读模式选择（译文/原文/双语）
-    display_mode = st.radio("阅读模式", ["译文", "原文", "双语"], horizontal=True, label_visibility="collapsed")
+    # 悬浮阅读模式选择器（UI被CSS接管）
+    display_mode = st.radio("阅读模式", ["译文", "原文", "双语"], label_visibility="collapsed")
     
-    # 极简翻页按钮 (上/下分布在两边)
-    col_prev_t, col_space_t, col_next_t = st.columns([1, 6, 1])
-    with col_prev_t:
+    # 顶部翻页导航栏 (列宽比 1.5 : 7 : 1.5 确保按钮长度是箭头的完美比例)
+    st.markdown("<div class='nav-btn-container'>", unsafe_allow_html=True)
+    col_p_t, col_s_t, col_n_t = st.columns([1.5, 7, 1.5])
+    with col_p_t:
         if st.session_state.prev_url:
-            if st.button("◀", key="p_top", use_container_width=True):
+            if st.button("◀", key="p_top", type="primary", use_container_width=True):
                 init_new_page(st.session_state.prev_url)
                 scroll_to_top()
                 st.rerun()
-    with col_next_t:
+    with col_n_t:
         if st.session_state.next_url:
-            if st.button("▶", key="n_top", use_container_width=True):
+            if st.button("▶", key="n_top", type="primary", use_container_width=True):
                 init_new_page(st.session_state.next_url)
                 scroll_to_top()
                 st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # 动态进度提示框
-    progress_box = st.empty()
-    untranslated_count = sum(1 for p in st.session_state.paragraphs_data if p["zh"] is None)
-    
-    # 逐段渲染逻辑
+    # 逐段渲染逻辑（静默后台边看边译，不显示剩余段落）
     for i, item in enumerate(st.session_state.paragraphs_data):
         
-        # 1. 动态按需翻译
+        # 1. 后台静默翻译
         if display_mode in ["译文", "双语"] and item["zh"] is None:
-            # 提示用户正在翻译的进度
-            progress_box.caption(f"⏳ 正在边译边读... (剩余 {untranslated_count} 段)")
-            # 发起翻译请求
             item["zh"] = translate_single_paragraph(item["en"])
-            untranslated_count -= 1
 
         # 2. 页面内容展示
         if display_mode == "译文":
@@ -265,34 +296,28 @@ if st.session_state.paragraphs_data:
                 st.markdown(f"<div class='article-para'>{item['zh']}</div>", unsafe_allow_html=True)
                 
         elif display_mode == "原文":
-            # 纯原文模式下，不会触发翻译，瞬间显示
             st.markdown(f"<div class='article-para en-text' style='color:#2F3542;'>{item['en']}</div>", unsafe_allow_html=True)
             
         elif display_mode == "双语":
             if item["en"] and item["zh"]:
-                # 双语排版：上方原文（灰色较小），下方译文（黑色正文）
                 st.markdown(f"<div class='article-para en-text'>{item['en']}</div>", unsafe_allow_html=True)
                 st.markdown(f"<div class='article-para' style='margin-top:-15px;'>{item['zh']}</div>", unsafe_allow_html=True)
                 st.markdown("<hr style='margin:10px 0; border:0; border-top:1px dashed #E2E8F0;'>", unsafe_allow_html=True)
 
-    # 翻译完成提示（3秒后清空）
-    if untranslated_count == 0 and display_mode != "原文":
-        progress_box.success("🎉 本章全部翻译完成！")
-        time.sleep(3)
-        progress_box.empty()
-
-    # 底部极简翻页按钮
+    # 底部翻页导航栏
     st.markdown("---")
-    col_prev_b, col_space_b, col_next_b = st.columns([1, 6, 1])
-    with col_prev_b:
+    st.markdown("<div class='nav-btn-container'>", unsafe_allow_html=True)
+    col_p_b, col_s_b, col_n_b = st.columns([1.5, 7, 1.5])
+    with col_p_b:
         if st.session_state.prev_url:
-            if st.button("◀", key="p_bot", use_container_width=True):
+            if st.button("◀", key="p_bot", type="primary", use_container_width=True):
                 init_new_page(st.session_state.prev_url)
                 scroll_to_top()
                 st.rerun()
-    with col_next_b:
+    with col_n_b:
         if st.session_state.next_url:
-            if st.button("▶", key="n_bot", use_container_width=True):
+            if st.button("▶", key="n_bot", type="primary", use_container_width=True):
                 init_new_page(st.session_state.next_url)
                 scroll_to_top()
                 st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
