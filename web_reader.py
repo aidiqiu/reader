@@ -6,44 +6,36 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from hashlib import md5
 
-# ---------- 百度翻译 API 配置 ----------
-BAIDU_APPID = "20260411002591934"
-BAIDU_APPKEY = "DeDfL7lqEMEKb3ehU5Ge"  # 请替换为完整密钥
-
-# ---------- 自定义 CSS 样式（修复标题裁剪、压缩顶部）----------
+st.set_page_config(page_title="汐涵阅读器", layout="wide")
 st.markdown("""
 <style>
-    /* 标题完整显示 */
-    h1 {
-        font-size: 2rem !important;
-        margin-top: 0px !important;
-        padding-top: 0px !important;
-        line-height: 1.8 !important;
-        min-height: 3.5rem !important;
-        overflow: visible !important;
+    /* 强力修复标题裁剪问题，移除不必要的限制 */
+    .main .block-container h1 {
+        font-size: 2.2rem !important;
         white-space: normal !important;
+        word-break: break-word !important;
+        overflow: visible !important;
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.5rem !important;
     }
-    /* 页面顶部间距减小 */
+    /* 页面整体内边距减小，让阅读区更大 */
     .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
+        padding-top: 1.5rem !important;
+        padding-bottom: 2rem !important;
     }
-    /* 段落间距强制生效 */
-    .para-spacing {
-        margin-bottom: 20px;
-        display: block;
-    }
-    /* 调试信息样式（可删除） */
-    .debug-info {
-        color: #888;
-        font-size: 0.8rem;
-        margin-bottom: 10px;
+    /* 优化中文段落排版：首行缩进，增加行高和段落间距 */
+    .article-para {
+        font-size: 1.15rem !important;
+        line-height: 1.8 !important;
+        margin-bottom: 24px !important;
+        text-align: justify;
+        letter-spacing: 0.5px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 页面配置 ----------
-st.set_page_config(page_title="汐涵阅读器", layout="wide")
+BAIDU_APPID = st.secrets.get("BAIDU_APPID", "")
+BAIDU_APPKEY = st.secrets.get("BAIDU_APPKEY", "")
 
 # ---------- 会话状态初始化 ----------
 if "current_url" not in st.session_state:
@@ -57,7 +49,8 @@ if "translated_paragraphs" not in st.session_state:
 if "url_history" not in st.session_state:
     st.session_state.url_history = []
 
-st.title("📚 汐涵阅读器")
+# 使用 Markdown 渲染大标题，稳定性更好
+st.markdown("# 📚 汐涵阅读器")
 st.markdown("输入英文书籍章节的网址，沉浸式体验中文翻译。")
 
 url_input = st.text_input(
@@ -66,22 +59,33 @@ url_input = st.text_input(
     key="url_input"
 )
 
-# ---------- 增强的段落过滤函数 ----------
+# ---------- 段落过滤函数 ----------
 def is_valid_paragraph(text):
-    """过滤导航、版权等非正文段落"""
-    text_lower = text.lower()
-    # 排除关键词且长度较短的段落
-    exclude_keywords = ['next', 'prev', 'previous', 'chapter', 'page', '©', 'copyright', 'all rights reserved', 'menu', 'home']
+    """过滤掉导航、版权、空内容等非正文段落"""
+    if not text or len(text.strip()) < 3:
+        return False
+
+    text_lower = text.lower().strip()
+
+    if text_lower in ['next', 'prev', 'previous', 'next »', '« prev', '« previous']:
+        return False
+    if text_lower.startswith('next') and len(text) < 80:
+        return False
+    if text_lower.startswith('prev') and len(text) < 80:
+        return False
+
+    exclude_keywords = ['©', 'copyright', 'all rights reserved', 'chapter', 'menu', 'home', 'page']
     for kw in exclude_keywords:
         if kw in text_lower:
-            if len(text) < 120:  # 短文本且含关键词，极可能是导航
+            if len(text) < 120:
                 return False
-    # 纯数字或极短文本排除
-    if text.isdigit() or len(text.strip()) < 3:
+
+    if text.replace('.', '').replace(',', '').replace(' ', '').isdigit():
         return False
+
     return True
 
-# ---------- 抓取网页内容并提取链接 ----------
+# ---------- 抓取网页内容 ----------
 def fetch_content_and_links(target_url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -89,26 +93,23 @@ def fetch_content_and_links(target_url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 提取正文段落（严格每个 p 标签）
         raw_paragraphs = []
+        # 核心优化：保留原网页段落的独立性
         for p in soup.find_all('p'):
             text = p.get_text().strip()
             if text:
                 raw_paragraphs.append(text)
 
-        # 应用过滤
         paragraphs = [p for p in raw_paragraphs if is_valid_paragraph(p)]
 
-        # 如果过滤后太少，则保留所有非空段落（仅过滤极短纯数字）
         if len(paragraphs) < 3:
-            paragraphs = [p for p in raw_paragraphs if len(p.strip()) > 5]
+            paragraphs = [p for p in raw_paragraphs if len(p.strip()) > 10]
 
-        # 最终保底
         if not paragraphs:
             full_text = soup.get_text().strip()
-            paragraphs = [p.strip() for p in full_text.split('\n') if p.strip()]
+            paragraphs = [p.strip() for p in full_text.split('\n') if len(p.strip()) > 10]
 
-        # 提取上一页
+        # 提取上一页链接
         prev_link = None
         prev_tag = soup.find('a', rel='prev')
         if not prev_tag:
@@ -118,7 +119,7 @@ def fetch_content_and_links(target_url):
         if prev_tag and prev_tag.get('href'):
             prev_link = urljoin(target_url, prev_tag['href'])
 
-        # 提取下一页
+        # 提取下一页链接
         next_link = None
         next_tag = soup.find('a', rel='next')
         if not next_tag:
@@ -132,7 +133,7 @@ def fetch_content_and_links(target_url):
     except Exception as e:
         return f"错误：抓取网页时出错。 {e}", None, None
 
-# ---------- 单段落翻译函数 ----------
+# ---------- 单段落翻译（重大修复：支持多行翻译拼接）----------
 def translate_single_paragraph(text):
     if not text or len(text.strip()) == 0:
         return ""
@@ -158,17 +159,19 @@ def translate_single_paragraph(text):
             result = response.json()
 
             if 'trans_result' in result:
-                return result['trans_result'][0]['dst']
+                # 【修复核心】遍历所有翻译结果切片，用换行符拼接，确保长段落不丢失、不合并
+                translated_chunks = [sub_res['dst'] for sub_res in result['trans_result']]
+                return "\n".join(translated_chunks)
             else:
                 error_msg = result.get('error_msg', '未知错误')
                 if attempt < max_retries - 1:
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                     continue
                 else:
                     return f"[翻译失败: {error_msg}]"
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(1.5)
+                time.sleep(1.0)
             else:
                 return f"[翻译失败: {str(e)[:50]}...]"
     return "[翻译失败]"
@@ -188,27 +191,25 @@ def translate_paragraphs(english_paragraphs):
         progress_bar.progress((i + 1) / total)
 
     status_text.text("翻译完成！")
-    time.sleep(0.5)
+    time.sleep(0.3)
     status_text.empty()
     progress_bar.empty()
 
     return translated
 
-# ---------- 滚动到顶部的 JavaScript（确保在页面加载后执行）----------
+# ---------- 强制滚动到顶部 ----------
 def scroll_to_top():
     st.markdown("""
     <script>
         (function() {
             window.scrollTo(0, 0);
-            // 针对移动端，延迟再执行一次确保生效
-            setTimeout(function() {
-                window.scrollTo(0, 0);
-            }, 100);
+            var mainContent = window.parent.document.querySelector('.main');
+            if (mainContent) { mainContent.scrollTo(0, 0); }
         })();
     </script>
     """, unsafe_allow_html=True)
 
-# ---------- 加载并翻译 ----------
+# ---------- 加载并翻译指定网址 ----------
 def load_and_translate(url, add_to_history=True):
     with st.spinner("正在抓取网页内容..."):
         result = fetch_content_and_links(url)
@@ -231,7 +232,7 @@ def load_and_translate(url, add_to_history=True):
         if not st.session_state.url_history or st.session_state.url_history[-1] != url:
             st.session_state.url_history.append(url)
 
-# ---------- 处理“开始阅读” ----------
+# ---------- “开始阅读”按钮 ----------
 if st.button("开始阅读", type="primary", use_container_width=True):
     if url_input:
         st.session_state.url_history = []
@@ -266,22 +267,19 @@ if st.session_state.translated_paragraphs:
 
     st.markdown("---")
 
-    # 阅读进度与段落数（调试用，可删除）
+    # 阅读进度
     para_count = len(st.session_state.translated_paragraphs)
     if st.session_state.url_history:
         st.caption(f"📄 第 {len(st.session_state.url_history)} 页 · 共 {para_count} 段")
 
     st.markdown("### 📖 中文阅读区")
 
-    # 逐段渲染，确保段落间距
-    for idx, para in enumerate(st.session_state.translated_paragraphs):
+    # 【重要优化】优雅渲染中文正文，支持段落内部的换行符
+    for para in st.session_state.translated_paragraphs:
         if para and para.strip():
-            # 可选：添加段落序号帮助诊断（正常使用可注释掉）
-            # st.markdown(f"<span class='debug-info'>段落 {idx+1}</span>", unsafe_allow_html=True)
-            st.markdown(para)
-            st.markdown("<div class='para-spacing'></div>", unsafe_allow_html=True)
+            formatted_para = para.replace("\n", "<br>")
+            st.markdown(f"<div class='article-para'>{formatted_para}</div>", unsafe_allow_html=True)
 
-    # 底部导航栏
     st.markdown("---")
     col1_bottom, col2_bottom = st.columns(2)
     with col1_bottom:
@@ -297,5 +295,4 @@ if st.session_state.translated_paragraphs:
                 scroll_to_top()
                 st.rerun()
 
-    # 再次确保滚动到顶部（应对某些浏览器延迟）
     scroll_to_top()
